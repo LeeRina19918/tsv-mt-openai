@@ -13,6 +13,9 @@ from placeholders import mask_placeholders, placeholders_match, restore_placehol
 
 DEFAULT_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 MAX_CHARS_PER_REQUEST = 9000
+DEFAULT_BATCH_SIZE = 8
+DEFAULT_SLEEP_BETWEEN_BATCHES = 1.0
+DEFAULT_MAX_RETRIES = 12
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,31 +53,28 @@ def post_with_retry(
     url: str,
     headers: dict,
     payload: list,
-    timeout: int,
-    max_retries: int,
+    timeout: int = 60,
     params: Optional[dict] = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> requests.Response:
-    base_delay = 0.5
-    max_delay = 8.0
-    for attempt in range(max_retries + 1):
+    base_delay = 1.0
+    max_delay = 15.0
+    for attempt in range(max_retries):
         response = requests.post(url, headers=headers, json=payload, timeout=timeout, params=params)
-        if response.status_code != 429:
-            response.raise_for_status()
-            return response
-        retry_after = response.headers.get("Retry-After")
-        if retry_after:
-            try:
-                delay = float(retry_after)
-            except ValueError:
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = min(max_delay, base_delay * (2**attempt))
+            else:
                 delay = min(max_delay, base_delay * (2**attempt))
-            if delay > 0:
-                time.sleep(delay)
-        else:
-            delay = min(max_delay, base_delay * (2**attempt))
-            delay += random.uniform(0, 0.25)
+            delay += random.uniform(0, 0.5)
             time.sleep(delay)
-        if attempt >= max_retries:
-            response.raise_for_status()
+            continue
+        response.raise_for_status()
+        return response
     response.raise_for_status()
     return response
 
@@ -140,9 +140,9 @@ def main() -> int:
     key = os.getenv("AZURE_TRANSLATOR_KEY")
     region = os.getenv("AZURE_TRANSLATOR_REGION")
     endpoint = os.getenv("AZURE_TRANSLATOR_ENDPOINT", DEFAULT_ENDPOINT)
-    batch_size = args.batch_size or env_int("TRANSLATE_BATCH_SIZE", 15)
-    sleep_between_batches = env_float("TRANSLATE_SLEEP", 0.25)
-    max_retries = env_int("TRANSLATE_MAX_RETRIES", 8)
+    batch_size = args.batch_size or env_int("TRANSLATE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
+    sleep_between_batches = env_float("TRANSLATE_SLEEP", DEFAULT_SLEEP_BETWEEN_BATCHES)
+    max_retries = env_int("TRANSLATE_MAX_RETRIES", DEFAULT_MAX_RETRIES)
 
     if not key or not region:
         print("ERROR: AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_REGION must be set.", file=sys.stderr)
