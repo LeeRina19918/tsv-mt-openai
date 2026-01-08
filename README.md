@@ -33,11 +33,22 @@ id\tflags\tsource\ttranslation
 2\tui\tOptions\t
 ```
 
+## Quick test on a smaller file
+
+```bash
+head -n 200 input/uk.tsv > input/uk_small.tsv
+bash run_translate.sh input/uk_small.tsv
+```
+
 ## Troubleshooting
 
 - **Missing columns**: the TSV must have a header row and include `source` plus `translation` or `translated`.
 - **Missing key/region**: set `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION` before running the scripts.
 - **QA failures**: if placeholder checks fail, that row is skipped and counted as `QA failed` in the summary.
+- **429 throttling**: the tool retries automatically with backoff. If Azure keeps throttling, try tuning in `.env`:
+  - `TRANSLATE_BATCH_SIZE=10`
+  - `TRANSLATE_SLEEP=0.5`
+  Note: F0 quota errors (like `403001`) are different from 429.
 
 ## Commands
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# at top of run_translate.sh
 if [ -f ".env" ]; then
   set -a
   . ./.env

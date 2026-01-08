@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -f ".env" ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 shopt -s nullglob
 FILES=(input/*.tsv)
 

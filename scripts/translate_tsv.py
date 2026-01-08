@@ -2,8 +2,10 @@
 import argparse
 import csv
 import os
+import random
 import sys
-from typing import List
+import time
+from typing import List, Optional
 
 import requests
 
@@ -17,11 +19,64 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translate TSV source column to Ukrainian.")
     parser.add_argument("--in", dest="input_path", required=True)
     parser.add_argument("--out", dest="output_path", required=True)
-    parser.add_argument("--from-lang", default="EN")
-    parser.add_argument("--to-lang", default="UK")
-    parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--from-lang", default="en")
+    parser.add_argument("--to-lang", default="uk")
+    parser.add_argument("--batch-size", type=int)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def post_with_retry(
+    url: str,
+    headers: dict,
+    payload: list,
+    timeout: int,
+    max_retries: int,
+    params: Optional[dict] = None,
+) -> requests.Response:
+    base_delay = 0.5
+    max_delay = 8.0
+    for attempt in range(max_retries + 1):
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout, params=params)
+        if response.status_code != 429:
+            response.raise_for_status()
+            return response
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                delay = min(max_delay, base_delay * (2**attempt))
+            if delay > 0:
+                time.sleep(delay)
+        else:
+            delay = min(max_delay, base_delay * (2**attempt))
+            delay += random.uniform(0, 0.25)
+            time.sleep(delay)
+        if attempt >= max_retries:
+            response.raise_for_status()
+    response.raise_for_status()
+    return response
 
 
 def translate_batch(
@@ -31,19 +86,26 @@ def translate_batch(
     from_lang: str,
     to_lang: str,
     texts: List[str],
+    max_retries: int,
 ) -> List[str]:
     if not texts:
         return []
     url = f"{endpoint.rstrip('/')}/translate"
-    params = {"api-version": "3.0", "from": from_lang, "to": to_lang}
     headers = {
         "Ocp-Apim-Subscription-Key": key,
         "Ocp-Apim-Subscription-Region": region,
         "Content-Type": "application/json",
     }
     body = [{"text": text} for text in texts]
-    response = requests.post(url, params=params, headers=headers, json=body, timeout=60)
-    response.raise_for_status()
+    params = {"api-version": "3.0", "from": from_lang, "to": to_lang}
+    response = post_with_retry(
+        url,
+        headers,
+        body,
+        timeout=60,
+        max_retries=max_retries,
+        params=params,
+    )
     data = response.json()
     translations = []
     for item in data:
@@ -78,6 +140,9 @@ def main() -> int:
     key = os.getenv("AZURE_TRANSLATOR_KEY")
     region = os.getenv("AZURE_TRANSLATOR_REGION")
     endpoint = os.getenv("AZURE_TRANSLATOR_ENDPOINT", DEFAULT_ENDPOINT)
+    batch_size = args.batch_size or env_int("TRANSLATE_BATCH_SIZE", 15)
+    sleep_between_batches = env_float("TRANSLATE_SLEEP", 0.25)
+    max_retries = env_int("TRANSLATE_MAX_RETRIES", 8)
 
     if not key or not region:
         print("ERROR: AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_REGION must be set.", file=sys.stderr)
@@ -122,7 +187,7 @@ def main() -> int:
         masked_sources.append(masked)
         placeholder_lists.append(placeholders)
 
-    for batch in batched_indices(masked_sources, args.batch_size):
+    for batch in batched_indices(masked_sources, batch_size):
         batch_indices = [indices_to_translate[i] for i in batch]
         batch_masked = [masked_sources[i] for i in batch]
         batch_placeholders = [placeholder_lists[i] for i in batch]
@@ -131,9 +196,10 @@ def main() -> int:
                 endpoint,
                 key,
                 region,
-                args.from_lang,
-                args.to_lang,
+                args.from_lang.lower(),
+                args.to_lang.lower(),
                 batch_masked,
+                max_retries,
             )
         except Exception as exc:
             print(f"ERROR: Translation batch failed: {exc}", file=sys.stderr)
@@ -148,6 +214,8 @@ def main() -> int:
             restored = restore_placeholders(masked_translation, placeholders)
             rows[idx][target_column] = restored
             translated_rows += 1
+
+        time.sleep(sleep_between_batches)
 
     output_path = args.output_path
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
