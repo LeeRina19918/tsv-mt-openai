@@ -1,61 +1,129 @@
-# tsv-auto-translate-azure
+# TSV-MT-OPENAI (Azure Translator) — машинний переклад TSV локалізації
 
-Super-simple TSV machine translation for game localization using Azure Translator.
+Цей репозиторій автоматично перекладає **TSV-файл локалізації гри**: бере текст із колонки `source`, надсилає в **Azure AI Translator (Text Translation)**, і записує результат у колонку `translation`. Готовий файл з’являється в папці `output/`.
 
-## What this does
+## Що потрібно перед стартом
 
-- Reads **only** the `source` column in your TSV.
-- Writes translations **only** into the `translation` column (or `translated` if `translation` is missing).
-- Preserves all other columns exactly as-is.
-- Output goes to `output/*.uk.tsv` with the same row order/count.
+* Обліковий запис **Microsoft Azure**
+* Створений ресурс **Azure AI Translator (Text Translation)** на тарифі **Free (F0)** (щоб було безкоштовно в межах квоти)
+* Ваші дані доступу: **Key**, **Region**, **Endpoint**
+* Файл локалізації у форматі **TSV** з колонками (заголовок має бути обов’язково):
 
-## Quick start (Codespaces)
+  * `id`
+  * `flags`
+  * `source`
+  * `translation`
 
-1. Put your TSV files in `input/`.
-2. Copy `.env.example` to `.env` and fill in `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION`.
-3. Run:
+> Важливо: безкоштовний F0 має обмеження на кількість символів/запитів у період. Якщо квота закінчиться — переклад може зупинятись або відповідати помилками (часто 429).
+
+---
+
+# 1) Створити безкоштовний Azure Translator (F0)
+
+1. Увійдіть в Azure Portal.
+2. Створіть ресурс перекладу:
+
+   * **Create a resource** → пошук: **Translator** / **Text Translation**
+3. При створенні:
+
+   * **Pricing tier**: оберіть **F0 (Free)**
+   * **Region**: оберіть будь-який доступний (наприклад `westeurope`)
+   * Назви (Name/Resource group) — довільні (наприклад `tran-game-uk`)
+4. Після створення відкрийте ресурс і знайдіть:
+
+   * **Keys and Endpoint** (або розділ **Keys**)
+   * Збережіть:
+
+     * **KEY1** (або KEY2)
+     * **Region**
+     * **Endpoint**
+
+> Якщо не бачите “Keys and Endpoint”: переконайтесь, що ви відкрили **сам ресурс перекладача**, а не resource group. У лівому меню зазвичай є пункт **Keys and Endpoint** / **Keys**.
+
+---
+
+# 2) Налаштувати `.env` (обов’язково)
+
+У корені репозиторію створіть файл `.env` (або відредагуйте, якщо він вже створений у Codespaces) і вставте туди ваші значення:
+
+```env
+AZURE_TRANSLATOR_KEY=ВАШ_КЛЮЧ
+AZURE_TRANSLATOR_REGION=ВАША_РЕГІЯ (наприклад westeurope)
+AZURE_TRANSLATOR_ENDPOINT=ВАШ_ENDPOINT
+```
+
+## Який Endpoint правильний
+
+Є два варіанти endpoint’а. Використовуйте **той, який у вас показує Azure** в “Keys and Endpoint”.
+
+Найчастіше робочий варіант для ресурсного endpoint:
+
+```env
+AZURE_TRANSLATOR_ENDPOINT=https://<ваш-ресурс>.cognitiveservices.azure.com/translator/text/v3.0
+```
+
+> Без `.env` переклад не запуститься. Це нормально: кожен користувач підв’язує **свій** Azure.
+
+---
+
+# 3) Завантажити TSV у `input/`
+
+1. Покладіть ваш файл у папку `input/`
+   Наприклад: `input/uk.tsv`
+
+---
+
+# 4) Запустити переклад
+
+## Переклад одного файлу
 
 ```bash
-bash run_translate_all.sh
+bash run_translate.sh input/uk.tsv
 ```
 
-Or for a single file:
+Після завершення результат буде тут:
 
-```bash
-bash run_translate.sh input/example.tsv
-```
+* `output/uk.uk.tsv` (назва формується автоматично)
 
-## Example TSV (tiny)
+## Де шукати результат
 
-```tsv
-id\tflags\tsource\ttranslation
-1\tui\tStart Game\t
-2\tui\tOptions\t
-```
+Відкрийте папку `output/` у файловому дереві Codespaces або перевірте командою:
 
-## Quick test on a smaller file
+---
 
-```bash
-head -n 200 input/uk.tsv > input/uk_small.tsv
-bash run_translate.sh input/uk_small.tsv
-```
+# 5) Скільки часу це займає (орієнтовно)
 
-## Troubleshooting
+Час залежить від:
 
-- **Missing columns**: the TSV must have a header row and include `source` plus `translation` or `translated`.
-- **Missing key/region**: set `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION` before running the scripts.
-- **QA failures**: if placeholder checks fail, that row is skipped and counted as `QA failed` in the summary.
-- **Rate limits (429)**: the tool automatically retries and slows down to avoid throttling. No action is required. Azure F0 quotas still apply, so if you hit a quota limit you may need to wait for a reset.
+* кількості рядків із текстом у `source`
+* пауз між батчами (щоб не ловити 429)
+* стабільності мережі та ліміту F0
 
-## Commands
+## Орієнтовні діапазони часу (типові)
 
-- One file:
-  ```bash
-  bash run_translate.sh input/example.tsv
+Це приблизні оцінки для обережного режиму з паузами і можливими 429:
+
+* **1 000 рядків**: ~ **5–15 хв**
+* **5 000 рядків**: ~ **25–60 хв**
+* **10 000 рядків**: ~ **45–120 хв**
+* **20 000 рядків**: ~ **1.5–4 години**
+
+> Якщо в процесі “довго нічого не відбувається” — це може бути нормальна пауза між батчами або очікування після 429.
+
+---
+
+## `Connection refused` або мережеві помилки
+
+* інколи проблема в мережі Codespaces/проксі або доступі до домену
+* спробуйте перезапустити Codespace або повторити запуск пізніше
+
+---
+
+# Безпека
+
+* **Ніколи не комітьте** `.env` з ключами в репозиторій.
+* Переконайтесь, що `.gitignore` містить рядок:
+
   ```
-  Output: `output/example.uk.tsv`
-- All files:
-  ```bash
-  bash run_translate_all.sh
+  .env
   ```
-  Output: `output/*.uk.tsv`
