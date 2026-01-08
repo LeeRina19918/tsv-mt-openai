@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# at top of run_translate.sh
+if [ -f ".env" ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 input/FILE.tsv" >&2
   exit 1
